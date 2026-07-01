@@ -54,8 +54,8 @@ and put it in `.env` as `FOOTBALL_DATA_TOKEN`.
 While the old backend is still running, save its data:
 
 ```bash
-curl https://<your-old-tunnel-url>/users   -o users.json
-curl https://<your-old-tunnel-url>/matches -o matches.json
+curl https://nowhere-admission-draft-adapters.trycloudflare.com/users   -o users.json
+curl https://nowhere-admission-draft-adapters.trycloudflare.com/matches -o matches.json
 ```
 
 ## 3. Import it here
