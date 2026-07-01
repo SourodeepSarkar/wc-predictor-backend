@@ -1,5 +1,7 @@
 # WC2026 Predictor — replacement backend
 
+### Deployed on Railway
+
 This replaces both pieces of your old setup:
 - the AWS Lambda at `.../sync` (the one giving post-extra-time / post-penalty
   scores instead of full-time scores), and
