@@ -8,22 +8,17 @@
  *   users.json   = the JSON array returned by the old backend's GET /users
  *   matches.json = the JSON array returned by the old backend's GET /matches
  *
- * How to get those files (do this BEFORE you retire the old backend):
- *   curl https://<old-tunnel-url>/users   -o users.json
- *   curl https://<old-tunnel-url>/matches -o matches.json
- *
  * IMPORTANT / by design: this script deliberately does NOT import
  * score_home, score_away, status, or points from the old matches.json.
  * Those are exactly the fields the old backend got wrong for knockout
  * games. Instead it imports only the stable facts (teams, kickoff,
  * stage, match_id, and each user's raw pred_home/pred_away guess).
  *
- * After importing, run a sync (POST /sync, or click "Refresh Results"
- * in the app once you've pointed it at this new backend) — that pulls
- * every score fresh from API-FOOTBALL using the fixed score.fulltime
- * logic, auto-links each match by team name + date, and re-grades every
- * prediction from scratch. That single step both fixes the ongoing bug
- * AND corrects the one match that was wrongly marked before.
+ * After importing, run `npm run fix-past-error` (or just start the
+ * server -- it auto-syncs on boot) -- that pulls every score fresh
+ * from football-data.org using the fixed score.regularTime logic,
+ * auto-links each match by team name + date, and re-grades every
+ * prediction from scratch.
  */
 const fs = require('fs');
 const path = require('path');
@@ -102,4 +97,4 @@ const tx = db.transaction(() => {
 tx();
 
 console.log(`Imported ${userCount} users, ${matchCount} matches, ${predCount} predictions.`);
-console.log(`Scores/status were NOT imported on purpose — run a /sync now to populate them correctly.`);
+console.log(`Scores/status were NOT imported on purpose -- run "npm run fix-past-error" now to populate them correctly.`);

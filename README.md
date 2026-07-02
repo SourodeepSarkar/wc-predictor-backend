@@ -1,137 +1,160 @@
-# WC2026 Predictor — replacement backend
+# WC2026 Predictor — replacement backend (v1.1 — bugfix)
 
-### Deployed on Railway
+## What was actually wrong with Bel vs Sen showing 3-2
 
-This replaces both pieces of your old setup:
-- the AWS Lambda at `.../sync` (the one giving post-extra-time / post-penalty
-  scores instead of full-time scores), and
-- the tunneled backend your `index.html` was calling for `/users`,
-  `/matches`, `/predictions`, `/leaderboard`.
+Two bugs, both now fixed:
 
-It's a plain Node/Express server with a local SQLite file -- free, no
-hosting account required, and matches your old setup's style (you were
-already exposing a local server via a Cloudflare Tunnel, so this drops
-into that same pattern).
+1. **Wrong JSON key names.** football-data.org's score sub-objects use
+   `{ homeTeam, awayTeam }`, not `{ home, away }`. The previous version
+   of `lib/footballData.js` read `.home`/`.away` everywhere, which is
+   always `undefined` against the real API -- so `score.regularTime`
+   was never actually being picked up correctly.
+2. **A dependency that was never installed.** `footballData.js` called
+   `require('node-fetch')`, but `node-fetch` was never in
+   `package.json`. That call was almost certainly throwing "Cannot
+   find module" on every sync attempt, meaning `/sync` -- both the
+   button and `fix-past-error.js` -- was failing silently and never
+   touching the database. That's why the match kept showing 3-2 no
+   matter how many times you ran the fix: the fix was never actually
+   running.
 
-## The bug, and the fix
+Fixed by switching to Node's **built-in `fetch`** (Node 18+, which
+`better-sqlite3` already requires) instead of `node-fetch`, and by
+correcting every `score.X.home`/`.away` read to `score.X.homeTeam`/
+`.awayTeam`. See the comments in `lib/footballData.js` for the full
+reasoning.
 
-**Note:** an earlier version of this project used API-FOOTBALL, but its
-free tier turned out to only cover seasons 2022-2024, not the live 2026
-tournament. This version uses **football-data.org** instead, whose free
-tier has permanently included the FIFA World Cup (the maintainer has
-publicly committed to this staying free), with no season restriction.
+I also widened match-linking from "exact same calendar day" to
+"within 1 day," since a kickoff near UTC midnight can land on a
+different calendar date than the one recorded in your legacy export --
+which could otherwise cause a match to silently fail to link (and thus
+never get updated) even with the fetch bug fixed.
 
-football-data.org's `score` object has a naming quirk worth knowing:
+## What to do now
 
-- `score.fullTime` -- despite the name, this is the FINAL match score,
-  however the game ended. For a knockout game decided in extra time,
-  this **includes** the extra-time goals.
-- `score.regularTime` -- the score at the end of 90 minutes, full stop,
-  no matter what happened afterward. This is what predictions must be
-  graded against.
-
-The old backend's bug was reading a "final score" field without
-separating regulation time from extra time -- the exact same trap as
-`fullTime` here. This backend always reads `score.regularTime` for
-grading (see `lib/footballData.js`, the `normalizeMatch` function --
-the reasoning is right there in the comments).
-
-Docs: https://docs.football-data.org/general/v4/overtime.html
-
-## 1. Install
-
-```bash
-cd wc-predictor-backend
-npm install
-cp .env.example .env
-```
-
-Get a free token at https://www.football-data.org/client/register
-and put it in `.env` as `FOOTBALL_DATA_TOKEN`.
-
-## 2. Export your existing data from the old backend
-
-While the old backend is still running, save its data:
-
-```bash
-curl https://nowhere-admission-draft-adapters.trycloudflare.com/users   -o users.json
-curl https://nowhere-admission-draft-adapters.trycloudflare.com/matches -o matches.json
-```
-
-## 3. Import it here
-
-```bash
-npm run import-legacy -- users.json matches.json
-```
-
-This intentionally **does not** copy over the old scores, statuses, or
-points -- only teams, kickoff times, stages, and each person's raw
-guesses. That's on purpose: those old fields are exactly what was wrong.
-
-## 4. Run the fix
+You already ran `import-legacy`, so you don't need to redo that step.
+Just re-run the fix with this corrected code:
 
 ```bash
 npm run fix-past-error
 ```
 
-This pulls fresh data from football-data.org (with the fix applied),
-links each imported match to the right fixture by team names + date,
-fills in correct scores, and re-grades every prediction from scratch.
-It prints out every match whose result changed -- that's your
-confirmation the previously-wrong match got corrected, along with
-anyone's points that were affected by it.
+It will print out every match whose score/status changed -- you should
+see Belgium vs Senegal listed as `3-2 -> 2-2` (or similar) in that
+output. If a match you expect to see corrected does NOT show up, the
+script also prints any fixtures it couldn't link to a local row, which
+will tell you if it's a team-name mismatch rather than the old bug.
 
-## 5. Run the server
+## Auto-sync on load, not just on "Refresh Results"
+
+The server now:
+- **Syncs once immediately on boot** (i.e. the moment Railway starts
+  the process), so data is fresh without anyone touching the button.
+- **Syncs again every `SYNC_INTERVAL_MINUTES`** (default 10, set in
+  `.env`) for as long as the server stays running.
+- The "Refresh Results" button still works exactly as before, calling
+  the same `/sync` endpoint on demand.
+
+All three paths (boot, timer, button) now call the exact same
+`performSync()` function in `server.js`, so there's only one place the
+sync logic can go wrong, not three.
+
+One caveat worth knowing on Railway specifically: if you're on a plan
+where the service can sleep/restart between requests, the boot-sync
+still covers you (it fires on every restart), but the interval timer
+only keeps running while the process is actually alive. That's fine for
+this use case -- predictions only need to be correct by the time
+someone loads the page, and the boot sync handles that.
+
+## Redeploying
 
 ```bash
-npm start
+npm install     # package.json no longer references node-fetch at all
+npm run fix-past-error
+npm start        # or however Railway runs it -- same start command
 ```
 
-Expose it the same way you did before:
+If you're on Railway, just push these files; Railway will reinstall
+dependencies and restart the service, which triggers the boot sync
+automatically.
 
+## Everything else
+
+Unchanged from before -- see the earlier sections of this project for
+the `/users`, `/matches`, `/predictions`, `/leaderboard` endpoint docs,
+the points-scoring rules, and the `index.html` edits needed to point at
+this backend.
+
+## Update: the homeTeam/awayTeam fix was also wrong
+
+If you ran `fix-past-error` and got `?-?` for *every* match (not just
+knockout ones), that confirms `homeTeam`/`awayTeam` wasn't right either
+-- I was going on documentation text without a live token to verify
+against, and got it wrong twice now. Rather than guess a third time:
+
+1. Run the new diagnostic first:
+   ```bash
+   npm run debug-fixture
+   ```
+   This hits football-data.org directly and prints the **raw, actual**
+   JSON for Belgium vs Senegal plus a plain finished match -- no
+   interpretation, just what the API really sends back.
+
+2. `lib/footballData.js`'s `pair()` helper now accepts **either**
+   `{home, away}` or `{homeTeam, awayTeam}` automatically, so this
+   should self-correct regardless of which naming the API actually
+   uses. Re-run:
+   ```bash
+   npm run fix-past-error
+   ```
+
+3. If scores are still coming back null/wrong after that, paste the
+   `debug-fixture` output back -- with the real raw shape in hand there's
+   no more guessing involved.
+
+## Update 2: the real fix, verified against live data
+
+Your `debug-fixture` output settled it. Ground truth from the actual
+API:
+
+```
+Belgium vs Senegal score object:
+{
+  "winner": "HOME_TEAM",
+  "duration": "REGULAR",          <- misleading! this match went to ET
+  "fullTime":    { "home": 3, "away": 2 },
+  "halfTime":    { "home": 0, "away": 1 },
+  "regularTime": { "home": null, "away": null },   <- not backfilled
+  "extraTime":   { "home": 1, "away": 0 }
+}
+```
+
+Two things this revealed:
+- Keys really are `home`/`away`, confirmed.
+- `duration` can't be trusted to tell you whether a match went to extra
+  time -- this one says `"REGULAR"` despite clearly having an
+  `extraTime` object. football-data.org's own data is inconsistent
+  here (compare Germany vs Paraguay, where `regularTime` WAS correctly
+  filled in alongside a penalty shootout).
+
+The fix now uses this priority order, which covers everything seen in
+your data:
+1. If `regularTime` is populated, use it directly.
+2. Else, if an `extraTime` object exists at all (regardless of what
+   `duration` claims), derive the 90-minute score as
+   `fullTime − extraTime`.
+3. Else, it's a plain match -- `fullTime` IS the regulation score.
+
+Verified against your three real examples:
+- Mexico vs South Africa -> 2-0 (plain match, unchanged)
+- Germany vs Paraguay -> 1-1 (regularTime trusted directly, penalty
+  shootout ignored for grading)
+- **Belgium vs Senegal -> 2-2** (derived: fullTime 3-2 minus extraTime
+  1-0)
+
+Re-run:
 ```bash
-cloudflared tunnel --url http://localhost:8787
+npm run fix-past-error
 ```
-
-Take the URL cloudflared prints and update line ~2818 of your
-`index.html`:
-
-```js
-const API = 'https://your-new-tunnel-url.trycloudflare.com';
-```
-
-Also replace the hardcoded AWS sync URL the "Refresh Results" button
-calls (search `index.html` for `d369cipp2c.execute-api...`) with:
-
-```js
-fetch(API + '/sync', { method: 'POST' })
-```
-
-(It's currently a separate hardcoded URL rather than using the `API`
-constant -- that's worth fixing while you're in there, since the whole
-point is retiring that endpoint.)
-
-## Going forward
-
-Every time someone clicks "Refresh Results," `/sync` re-pulls fixtures,
-re-applies the regulation-time-score fix, and re-grades all predictions
--- so this can't drift back into the old bug. New matches you haven't
-manually added yet get created automatically the first time they appear
-in the football-data.org response.
-
-## Notes
-
-- Free tier rate limit is 10 requests/minute -- one call per sync click
-  is nowhere close to that.
-- Predictions lock 5 minutes after kickoff, enforced server-side now
-  (matches the rule already stated in your leaderboard UI), configurable
-  via `PREDICTION_LOCK_MINUTES` in `.env`.
-- Set `ADMIN_KEY` in `.env` if you want `/sync` and `/admin/*` to require
-  a header (`x-admin-key: ...`) -- optional since a private tunnel URL is
-  already a reasonable barrier for a personal pool, but a real secret is
-  safer if you ever share the URL for other reasons.
-- `data.sqlite` is the entire database -- back it up occasionally (just
-  copy the file).
-
-ENDOFFILE
-echo done
+You should now see Belgium vs Senegal land on 2-2, and every other
+match should match what actually happened in 90 minutes.

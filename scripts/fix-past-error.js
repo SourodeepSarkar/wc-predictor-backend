@@ -20,6 +20,15 @@ function normalizeTeamName(name) {
     .replace(/[^a-z0-9]/g, '');
 }
 
+function dayKey(iso) {
+  return String(iso).slice(0, 10);
+}
+function daysApart(isoA, isoB) {
+  const a = new Date(dayKey(isoA) + 'T00:00:00Z').getTime();
+  const b = new Date(dayKey(isoB) + 'T00:00:00Z').getTime();
+  return Math.abs(a - b) / 86400000;
+}
+
 async function main() {
   const apiToken = process.env.FOOTBALL_DATA_TOKEN;
   if (!apiToken) {
@@ -44,24 +53,29 @@ async function main() {
     WHERE match_id=?
   `);
 
+  let linkedCount = 0, unmatchedFixtures = [];
+
   const tx = db.transaction(() => {
     for (const fx of fixtures) {
       let local = byFixtureId.get(fx.api_fixture_id);
       if (!local) {
         const fxHome = normalizeTeamName(fx.team_home);
         const fxAway = normalizeTeamName(fx.team_away);
-        const fxDate = fx.kickoff.slice(0, 10);
         const idx = unlinked.findIndex(m =>
           normalizeTeamName(m.team_home) === fxHome &&
           normalizeTeamName(m.team_away) === fxAway &&
-          String(m.kickoff).slice(0, 10) === fxDate
+          daysApart(m.kickoff, fx.kickoff) <= 1
         );
         if (idx !== -1) {
           local = unlinked[idx];
           unlinked.splice(idx, 1);
+          linkedCount++;
         }
       }
-      if (!local) continue; // brand new fixture with no local row yet -- handled by /sync, not this script
+      if (!local) {
+        unmatchedFixtures.push(`${fx.team_home} vs ${fx.team_away} (${fx.kickoff})`);
+        continue; // brand new fixture with no local row yet -- handled by /sync, not this script
+      }
       updateStmt.run(fx.team_home, fx.team_away, fx.status, fx.raw_status, fx.score_home, fx.score_away, fx.api_fixture_id, local.match_id);
     }
   });
@@ -97,6 +111,11 @@ async function main() {
     }
   }
   if (changed === 0) console.log('  (none -- nothing needed correcting)');
+  console.log(`\nLinked ${linkedCount} previously-unlinked local matches to fixtures this run.`);
+  if (unmatchedFixtures.length) {
+    console.log(`\n${unmatchedFixtures.length} fixture(s) from the API had no matching local row (fine if these are just new/future matches):`);
+    unmatchedFixtures.slice(0, 10).forEach(f => console.log(`  - ${f}`));
+  }
   console.log(`\nDone. ${changed} match(es) corrected, predictions re-graded.`);
 }
 

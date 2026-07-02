@@ -1,13 +1,17 @@
 {
   "name": "wc2026-predictor-backend",
-  "version": "1.0.0",
-  "description": "Self-hosted backend for the WC2026 Predictor frontend. Fixes the knockout-game full-time score bug by always using football-data.org's score.regularTime instead of the post-extra-time/post-shootout score.fullTime field.",
+  "version": "1.1.0",
+  "description": "Self-hosted backend for the WC2026 Predictor frontend. Fixes the knockout-game full-time score bug by always using football-data.org's score.regularTime (homeTeam/awayTeam keys) instead of score.fullTime, and auto-syncs on boot plus on a timer.",
   "type": "commonjs",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node server.js",
     "import-legacy": "node scripts/import-legacy.js",
-    "fix-past-error": "node scripts/fix-past-error.js"
+    "fix-past-error": "node scripts/fix-past-error.js",
+    "debug-fixture": "node scripts/debug-fixture.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
